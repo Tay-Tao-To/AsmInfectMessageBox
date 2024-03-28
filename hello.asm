@@ -458,7 +458,7 @@ _sectionExists:
   ret
 CreateNewSection endp
 
-OpenFile proc nameOfFile:DWORD
+OpenFile proc  nameOfFile:DWORD
   LOCAL hFile:HANDLE
   LOCAL fileSize:DWORD
   LOCAL pByte:DWORD
@@ -466,9 +466,9 @@ OpenFile proc nameOfFile:DWORD
   LOCAL pDosHeader:DWORD
   LOCAL pNtHeader:DWORD
 
-  mov eax, nameOfFile
 
-  invoke CreateFile ,eax, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
+
+  invoke CreateFile , nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
   mov hFile, eax
   cmp eax, INVALID_HANDLE_VALUE
   je _exit
@@ -584,7 +584,8 @@ _printUsage:
 
 _openFile:
   call GetThirdArg
-  invoke OpenFile, eax
+  push eax
+  call OpenFile
   jmp _exit
 
 _openDirectory:
