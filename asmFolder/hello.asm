@@ -467,7 +467,7 @@ OpenFile proc  nameOfFile:DWORD
   LOCAL pNtHeader:DWORD
 
 
-
+  mov eax [nameOfFile]
   invoke CreateFile , nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
   mov hFile, eax
   cmp eax, INVALID_HANDLE_VALUE
