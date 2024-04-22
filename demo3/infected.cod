@@ -13354,14 +13354,6 @@ ___formal$ = 12						; size = 8
 
 ; 2723 :     _EXPORT_STD _NODISCARD inline directory_iterator end(directory_iterator) noexcept {
 
-  00000	55		 push	 ebp
-  00001	8b ec		 mov	 ebp, esp
-
-; 2724 :         return {};
-
-  00003	33 c0		 xor	 eax, eax
-  00005	8b 4d 08	 mov	 ecx, DWORD PTR ___$ReturnUdt$[ebp]
-  00008	89 01		 mov	 DWORD PTR [ecx], eax
   0000a	89 41 04	 mov	 DWORD PTR [ecx+4], eax
   0000d	8b 4d 08	 mov	 ecx, DWORD PTR ___$ReturnUdt$[ebp]
   00010	e8 00 00 00 00	 call	 ??0directory_iterator@filesystem@std@@QAE@XZ ; std::filesystem::directory_iterator::directory_iterator

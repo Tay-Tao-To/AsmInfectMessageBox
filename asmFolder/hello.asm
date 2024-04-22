@@ -1,3 +1,4 @@
+ 
   .486
   .model flat, stdcall
   option casemap:none
@@ -37,62 +38,6 @@ start:
   assume fs:nothing
   call main
   exit
-
-
-GetThirdArg PROC
-  LOCAL pArgList: PTR BYTE
-  LOCAL nArgs: DWORD
-
-  push ebx
-  push ecx
-  push edx
-
-  ; Get the command line
-  invoke GetCommandLine
-  mov ebx, eax  ; Use ebx to store the return value
-
-  ; Split the command line into arguments
-  invoke CommandLineToArgvW, ebx, ADDR nArgs
-  mov pArgList, eax
-
-  ; Check if there are at least three arguments
-  mov eax, [nArgs]
-  cmp eax, 3
-  jl _error
-
-  ; Get the third argument
-  mov eax, [pArgList + 8]  ; The third argument is at pArgList[2]
-
-  ; Convert the third argument from wide string to ANSI string
-  invoke WideCharToMultiByte, CP_ACP, 0, eax, -1, NULL, 0, NULL, NULL
-  mov ebx, eax
-  invoke GlobalAlloc, GMEM_FIXED, eax
-  test eax, eax  ; Check if GlobalAlloc succeeded
-  jz _error
-  mov esi, eax ; esi points to the allocated memory
-  invoke WideCharToMultiByte, CP_ACP, 0, [pArgList + 8], -1, esi, ebx, NULL, NULL
-
-  ; Clean up
-  invoke LocalFree, pArgList  ; Correct function to free memory allocated by CommandLineToArgvW
-  mov eax, esi  ; Return the address of the ANSI string
-  pop edx
-  pop ecx
-  pop ebx
-  ret
-
-_error:
-  ; In case of an error, print the error message and exit
-  push OFFSET errorMsg
-  push 0
-  push 17  ; Length of "An error occurred"
-  push dword ptr [GetStdHandle(STD_OUTPUT_HANDLE)]
-  call WriteConsoleA
-
-  ; Exit the program properly on Windows
-  invoke ExitProcess, 1
-
-errorMsg db "An error occurred", 0
-GetThirdArg ENDP
 
 
 GetAlign PROC sizeOfSection:DWORD, alignment:DWORD, address:DWORD
@@ -652,23 +597,28 @@ OpenDirectory endp
 main proc
   LOCAL cmdline:DWORD
   LOCAL cmdlen:DWORD
-  
+  LOCAL secondArg[256]:BYTE  
+  LOCAL pSecondArg:DWORD
+  LOCAL pThirdArg:DWORD
   ;Get command line
   invoke GetCommandLine
   mov cmdline, eax
 
-  invoke lstrlen, cmdline
-  mov cmdlen, eax
-  cmp cmdlen, 2
+  invoke CommandLineToArgvW, cmdline, ADDR cmdlen
+
+  mov eax, [cmdlen]
+  cmp eax, 3
   jl _printUsage
 
-  ; Check for "-r" argument
-
-  invoke InString, 1, cmdline, offset fileArg
+ 
+  ; Get the second argument
+  mov eax, [eax + 8];
+  mov pSecondArg, eax
+  invoke lstrcmp, pSecondArg, offset fileArg
   cmp eax, 0
   jne _openFile
 
-  invoke InString, 1, cmdline, offset directoryArg
+  invoke lstrcmp, pSecondArg, offset directoryArg
   cmp eax, 0
   jne _openDirectory
 
@@ -682,13 +632,15 @@ _printUsage:
 
 
 _openFile:
-  call GetThirdArg
+  mov eax, [eax + 12]
+  mov pThirdArg, eax
   push eax
   call OpenFile1
   jmp _exit
 
 _openDirectory:
-  call GetThirdArg
+  mov eax, [eax + 12]
+  mov pThirdArg, eax
   push eax
   call OpenDirectory
   jmp _exit
