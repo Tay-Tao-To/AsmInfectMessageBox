@@ -1,5 +1,5 @@
  
-  .486
+  .386
   .model flat, stdcall
   option casemap:none
 
@@ -476,24 +476,27 @@ OpenFile1 PROC nameOfFile:PTR BYTE
   LOCAL byteWritten:DWORD
   LOCAL pDosHeader:PTR IMAGE_DOS_HEADER
   LOCAL pNtHeader:PTR IMAGE_NT_HEADERS
+  LOCAL hHeap:HANDLE
 
   ; Open the file
   invoke CreateFile, ADDR nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
-  mov hFile, eax
+  mov eax, hFile
   cmp eax, INVALID_HANDLE_VALUE
   je _exit
 
   ; Get the file size
   invoke GetFileSize, hFile, NULL
-  mov fileSize, eax
+  mov eax, fileSize
   cmp eax, 0
   je _closeHandle
 
-  ; Allocate memory for the file contents
-  invoke GlobalAlloc, GMEM_FIXED, fileSize
-  mov pByte, eax
-  test eax, eax ; Check if GlobalAlloc succeeded
-  jz _closeHandle ; If pByte is NULL, allocation failed
+  invoke GetProcessHeap ; Get a handle to the process's heap
+  mov hHeap, eax ; Save the handle
+  
+  invoke HeapAlloc, hHeap, 0, fileSize ; Allocate memory from the heap
+  test eax, eax ; Check if HeapAlloc succeeded
+  jz _closeHandle ; If eax is NULL, allocation failed
+  mov pByte, eax ; Save the pointer to the allocated memory
 
   ; Read the file into memory
   invoke ReadFile, hFile, pByte, fileSize, ADDR byteWritten, NULL
@@ -601,26 +604,25 @@ main proc
   LOCAL pSecondArg:DWORD
   LOCAL pThirdArg:DWORD
   ;Get command line
-  invoke GetCommandLine
+  invoke GetCommandLineW
   mov cmdline, eax
-
+  
   invoke CommandLineToArgvW, cmdline, ADDR cmdlen
-
+  mov ebx, eax  ; Save the pointer to the array of arguments
+  
   mov eax, [cmdlen]
-  cmp eax, 3
+  cmp eax, 2
   jl _printUsage
-
- 
+  
   ; Get the second argument
-  mov eax, [eax + 8];
-  mov pSecondArg, eax
-  invoke lstrcmp, pSecondArg, offset fileArg
+  mov eax, [ebx + 4]  ; Get the pointer to the second argument
+  invoke lstrcmpW, eax, offset fileArg
   cmp eax, 0
   jne _openFile
 
-  invoke lstrcmp, pSecondArg, offset directoryArg
+  invoke lstrcmpW, pSecondArg, offset directoryArg
   cmp eax, 0
-  jne _openDirectory
+  je _openDirectory
 
 _printUsage:
   print offset usageMsg
@@ -632,8 +634,7 @@ _printUsage:
 
 
 _openFile:
-  mov eax, [eax + 12]
-  mov pThirdArg, eax
+  mov eax, [ebx + 8]
   push eax
   call OpenFile1
   jmp _exit
