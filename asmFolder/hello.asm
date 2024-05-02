@@ -491,9 +491,9 @@ OpenFile1 PROC nameOfFile:PTR BYTE
   je _closeHandle
 
   invoke GetProcessHeap ; Get a handle to the process's heap
-  mov hHeap, eax ; Save the handle
   
-  invoke HeapAlloc, hHeap, 0, fileSize ; Allocate memory from the heap
+  
+  invoke HeapAlloc, eax, 0, fileSize ; Allocate memory from the heap
   test eax, eax ; Check if HeapAlloc succeeded
   jz _closeHandle ; If eax is NULL, allocation failed
   mov pByte, eax ; Save the pointer to the allocated memory
