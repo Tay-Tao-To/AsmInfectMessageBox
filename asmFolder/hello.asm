@@ -7,22 +7,22 @@
   include c:\masm32\macros\macros.asm
 
   include c:\masm32\include\masm32.inc
-  include c:\masm32\include\gdi32.inc
   include c:\masm32\include\user32.inc
   include c:\masm32\include\kernel32.inc
   include c:\masm32\include\shell32.inc
-
+  include \masm32\include\msvcrt.inc
 
   includelib c:\masm32\lib\masm32.lib
-  includelib c:\masm32\lib\gdi32.lib
   includelib c:\masm32\lib\user32.lib
   includelib c:\masm32\lib\kernel32.lib
   includelib c:\masm32\lib\shell32.lib
-
+  includelib \masm32\lib\msvcrt.lib
   IMAGE_FIRST_SECTION MACRO pNtHeader:REQ
     lea eax, [pNtHeader + SIZEOF IMAGE_NT_HEADERS]
   ENDM
   .data 
+    format db "%d", 0
+
 
     fileArg db "-f", 0
     directoryArg db "-d", 0
@@ -470,45 +470,38 @@ _sectionExists:
 CreateNewSection endp
 
 OpenFile1 PROC nameOfFile:PTR BYTE 
-  LOCAL hFile:HANDLE
-  LOCAL fileSize:DWORD
+  LOCAL hFile: DWORD
+  LOCAL fileSize: LARGE_INTEGER
   LOCAL pByte:PTR BYTE
-  LOCAL byteWritten:DWORD
+  LOCAL byteWritten:DWORD 
   LOCAL pDosHeader:PTR IMAGE_DOS_HEADER
   LOCAL pNtHeader:PTR IMAGE_NT_HEADERS
   LOCAL hHeap:HANDLE
 
   ; Open the file
-  invoke CreateFile, ADDR nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
-  mov eax, hFile
+  invoke CreateFileA, ADDR nameOfFile, GENERIC_READ or GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL
   cmp eax, INVALID_HANDLE_VALUE
-  je _exit
+  jz _closeHandle
+  mov hFile, eax
 
-  ; Get the file size
-  invoke GetFileSize, hFile, NULL
-  mov eax, fileSize
-  cmp eax, 0
-  je _closeHandle
+  ; Correctly obtaining fileSize
+  invoke GetFileSizeEx, hFile, ADDR fileSize
+  test eax, eax
+  jz _closeHandle
+  mov fileSize.LowPart, eax
+  invoke crt_printf, addr format,  fileSize.LowPart
 
-  invoke GetProcessHeap ; Get a handle to the process's heap
-  
-  
-  invoke HeapAlloc, eax, 0, fileSize ; Allocate memory from the heap
-  test eax, eax ; Check if HeapAlloc succeeded
-  jz _closeHandle ; If eax is NULL, allocation failed
-  mov pByte, eax ; Save the pointer to the allocated memory
+  invoke VirtualAlloc, NULL, fileSize.LowPart, MEM_COMMIT, PAGE_READWRITE
+  mov pByte, eax
+  test eax, eax
+  jz _closeHandle
 
-  ; Read the file into memory
-  invoke ReadFile, hFile, pByte, fileSize, ADDR byteWritten, NULL
-  mov eax, dword ptr [byteWritten]  
-  mov ebx, dword ptr [fileSize]
-  cmp eax, ebx
-  jne _freeMemory ; If not, something went wrong
+  invoke ReadFile, hFile, pByte, fileSize.LowPart, 0, 0
+  test eax, eax 
+  jz _freeMemory
 
-  ; Check the DOS header
-  mov eax, pByte
-  mov pDosHeader, eax
-  cmp WORD PTR [eax], IMAGE_DOS_SIGNATURE
+  mov ax , word ptr [pByte]
+  cmp ax, IMAGE_DOS_SIGNATURE.e_magic
   jne _freeMemory
 
   ; Check the NT header

